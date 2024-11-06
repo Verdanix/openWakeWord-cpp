@@ -23,7 +23,6 @@ const size_t embFeatures = 96;
 const size_t wwFeatures = 16;
 
 void ensureArg(int argc, char *argv[], int argi);
-void printUsage(char *argv[]);
 
 struct Settings {
   path melModelPath = path("models/melspectrogram.onnx");
@@ -52,6 +51,7 @@ struct State {
   size_t numReady;
   bool samplesExhausted = false, melsExhausted = false;
   bool samplesReady = false, melsReady = false;
+  bool featuresToOutputStopped = false;
   mutex mutSamples, mutMels, mutReady, mutOutput;
   condition_variable cvSamples, cvMels, cvReady;
 
@@ -260,7 +260,6 @@ void featuresToOutput(Settings &settings, State &state, size_t wwIdx,
     state.numReady += 1;
     state.cvReady.notify_one();
   }
-
   while (true) {
     {
       unique_lock lockFeatures{state.mutFeatures[wwIdx]};
@@ -312,7 +311,8 @@ void featuresToOutput(Settings &settings, State &state, size_t wwIdx,
             // Trigger level reached
             {
               unique_lock lockOutput(state.mutOutput);
-              cout << wwName << endl;
+              state.featuresToOutputStopped = true;
+              return;
             }
             activation = -settings.refractory;
           }
@@ -371,7 +371,6 @@ int main(int argc, char *argv[]) {
     } else if (arg == "--debug") {
       settings.debug = true;
     } else if (arg == "-h" || arg == "--help") {
-      printUsage(argv);
       exit(0);
     }
   }
@@ -422,6 +421,9 @@ int main(int argc, char *argv[]) {
       fread(samples, sizeof(int16_t), settings.frameSize, stdin);
 
   while (framesRead > 0) {
+    if (state.featuresToOutputStopped) {
+        break;
+    }
     {
       unique_lock lockSamples{state.mutSamples};
 
@@ -472,45 +474,8 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-void printUsage(char *argv[]) {
-  cerr << endl;
-  cerr << "usage: " << argv[0] << " [options]" << endl;
-  cerr << endl;
-  cerr << "options:" << endl;
-  cerr << "   -h        --help                  show this message and exit"
-       << endl;
-  cerr << "   -m  FILE  --model          FILE   path to wake word model "
-          "(repeat "
-          "for multiple models)"
-       << endl;
-  cerr << "   -t  NUM   --threshold      NUM    threshold for activation (0-1, "
-          "default: 0.5)"
-       << endl;
-  cerr << "   -l  NUM   --trigger-level  NUM    number of activations before "
-          "output (default: 4)"
-       << endl;
-  cerr << "   -r  NUM   --refractory     NUM    number of steps after "
-          "activation to wait (default: 20)"
-       << endl;
-  cerr
-      << "   --step-frames              NUM    number of 80 ms audio chunks to "
-         "process at a time (default: 4)"
-      << endl;
-  cerr << "   --melspectrogram-model     FILE   path to "
-          "melspectrogram.onnx file"
-       << endl;
-  cerr << "   --embedding-model          FILE   path to "
-          "embedding_model.onnx file"
-       << endl;
-  cerr << "   --debug                           print model probabilities to "
-          "stderr"
-       << endl;
-  cerr << endl;
-}
-
 void ensureArg(int argc, char *argv[], int argi) {
   if ((argi + 1) >= argc) {
-    printUsage(argv);
     exit(0);
   }
 }
